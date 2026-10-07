@@ -1,0 +1,423 @@
+\documentclass[12pt,a4paper]{report}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+\usepackage{hyperref}
+\usepackage{setspace}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{chngcntr}
+
+\renewcommand{\tablename}{Tableau}
+\renewcommand{\figurename}{Figure}
+
+\onehalfspacing
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue,
+  pdftitle={API REST sur TTGO T-Display},
+  pdfauthor={Léo Ponchon, Yasser Razzaki, Léo Faucon}
+}
+
+\lstdefinestyle{code}{
+  language=C++,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{gray!70!black},
+  stringstyle=\color{green!40!black},
+  showstringspaces=false,
+  frame=tb,
+  framerule=0.3pt,
+  columns=fullflexible,
+  tabsize=2,
+  breaklines=true
+}
+
+\counterwithin{figure}{section}
+\counterwithin{table}{section}
+
+\renewcommand{\thesection}{\arabic{section}}
+\renewcommand{\thesubsection}{\thesection.\arabic{subsection}}
+\renewcommand{\thesubsubsection}{\thesubsection.\arabic{subsubsection}}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{2cm}
+
+  {\Huge Projet IoT\par}
+  \vspace{0.5cm}
+  {\LARGE API REST sur un TTGO T-Display\par}
+  \vspace{1.5cm}
+
+  {\Large HAI912I -- Partie IoT\par}
+  \vspace{0.5cm}
+  {\large Faculté des Sciences\par}
+  \vfill
+
+  \begin{tabular}{l}
+    Léo Ponchon -- 22009418 \\
+    Yasser Razzaki \\
+    Léo Faucon
+  \end{tabular}
+
+  \vspace{1cm}
+
+  Enseignant : Alban Mancheron\\
+  Date : \today
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+Ce projet porte sur la réalisation d'une petite station de mesure basée sur un
+TTGO T-Display, lui-même construit autour d'un ESP32. La carte mesure la
+température et la luminosité, affiche ces informations sur son écran intégré et
+commande une LED en fonction de la luminosité.
+
+L'objectif principal est de rendre ces fonctions accessibles au moyen d'une
+API REST. Un client connecté au même réseau peut donc consulter les mesures,
+connaître l'état de la LED et modifier son fonctionnement. Les deux boutons de
+la carte permettent également de parcourir les informations affichées sans
+utiliser l'API.
+
+Le système associe acquisition analogique, affichage local, commande lumineuse
+et communication réseau dans une même réalisation embarquée. La séparation du
+programme en modules permet de distinguer les capteurs, l'affichage, la LED et
+le serveur HTTP.
+
+\section{Objectifs et cahier des charges}
+
+Le programme doit fournir les fonctions suivantes :
+
+\begin{itemize}
+  \item mesurer la température à l'aide d'une thermistance ;
+  \item mesurer une luminosité relative avec une photo-résistance ;
+  \item lister les deux capteurs et récupérer leurs valeurs ;
+  \item allumer, éteindre ou inverser l'état d'une LED par l'API ;
+  \item définir deux seuils de luminosité pour un fonctionnement automatique ;
+  \item utiliser l'écran et les boutons de la TTGO comme interface locale.
+\end{itemize}
+
+La réalisation conserve une organisation lisible et reproductible grâce à la
+description du câblage, des broches et des fonctions principales.
+
+\section{Matériel et montage}
+
+\subsection{Composants utilisés}
+
+Le montage utilise une TTGO T-Display, une photo-résistance, une thermistance
+de 10 k$\Omega$, des résistances fixes, une LED et une résistance de protection
+de 560 $\Omega$.
+
+La thermistance et la photo-résistance sont des composants résistifs. Elles ne
+possèdent donc pas de sens de branchement. En revanche, la LED est polarisée :
+son anode est reliée au GPIO par la résistance de 560 $\Omega$ et sa cathode
+est reliée à la masse.
+
+\subsection{Affectation des broches}
+
+\begin{table}[H]
+  \centering
+  \caption{Broches utilisées par le programme}
+  \label{tab:broches}
+  \begin{tabular}{ll}
+    \toprule
+    Fonction & GPIO \\
+    \midrule
+    Photo-résistance & 32 \\
+    Thermistance & 33 \\
+    LED externe & 25 \\
+    Bouton suivant & 35 \\
+    Bouton précédent & 0 \\
+    Rétroéclairage & 4 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Les GPIO32 et GPIO33 ont été choisis pour les mesures analogiques. Ils
+appartiennent à l'ADC1 de l'ESP32, ce qui évite le conflit habituel entre
+l'ADC2 et le Wi-Fi. L'alimentation des capteurs provient du 3,3 V de la carte.
+Le 5 V n'est jamais envoyé sur une entrée GPIO.
+
+Par convention, les fils rouges ou orange sont utilisés pour le 3,3 V, les
+fils noirs ou bleus pour la masse et les fils jaunes ou blancs pour les
+signaux. Cette convention facilite la vérification du montage avant la mise
+sous tension.
+
+\subsection{Ponts diviseurs}
+
+La thermistance est câblée comme suit :
+
+\begin{center}
+\texttt{3V3 -- thermistance -- GPIO33 -- résistance 10 kOhm -- GND}
+\end{center}
+
+Le point relié à GPIO33 est une tension intermédiaire. Elle dépend de la
+résistance de la thermistance, qui varie avec la température. La
+photo-résistance est câblée de la même manière, avec son point intermédiaire
+relié à GPIO32. Dans ce cas, le programme utilise directement la valeur ADC
+pour comparer des niveaux de luminosité ; il ne prétend pas calculer une
+luminosité en lux.
+
+\section{Acquisition et traitement des mesures}
+
+\subsection{Conversion analogique-numérique}
+
+L'ESP32 est configuré avec une résolution de 12 bits. Les valeurs renvoyées
+par l'ADC sont donc comprises entre 0 et 4095. Pour limiter les petites
+variations, chaque mesure est la moyenne de 16 lectures espacées de quelques
+millisecondes.
+
+\begin{lstlisting}[style=code,caption={Moyenne de plusieurs lectures ADC}]
+int lireMoyenne(uint8_t broche) {
+  long somme = 0;
+
+  for (int i = 0; i < 16; i++) {
+    somme += analogRead(broche);
+    delay(2);
+  }
+
+  return somme / 16;
+}
+\end{lstlisting}
+
+\subsection{Température}
+
+La thermistance utilisée est une NTC de 10 k$\Omega$ caractérisée par un
+coefficient $B$ égal à 3950. La résistance est d'abord déduite de la valeur
+ADC :
+
+\[
+R_{NTC}=R_{fixe}\left(\frac{4095}{ADC}-1\right)
+\]
+
+La température est ensuite calculée avec l'équation Beta :
+
+\[
+\frac{1}{T}=\frac{1}{T_0}+\frac{1}{B}\ln\left(\frac{R_{NTC}}{R_0}\right)
+\]
+
+Les températures sont exprimées en degrés Celsius après conversion depuis les
+Kelvins. Si la valeur ADC est 0 ou 4095, la lecture est considérée comme
+invalide et l'API renvoie \texttt{null} pour la température.
+
+\subsection{Commande automatique de la LED}
+
+La LED est allumée lorsque la luminosité passe sous le seuil d'allumage et
+éteinte lorsqu'elle dépasse le seuil d'extinction. Les valeurs par défaut sont
+1500 et 1900. L'écart entre les deux seuils forme une hystérésis et évite que
+la LED ne change d'état en permanence lorsque la mesure oscille autour d'une
+seule valeur.
+
+Le mode automatique peut être désactivé par une commande manuelle
+\texttt{on}, \texttt{off} ou \texttt{toggle}. La commande \texttt{auto}
+réactive le comportement automatique.
+
+\section{API REST}
+
+Le serveur HTTP écoute sur le port 80 de l'ESP32. Son adresse IP est affichée
+dans le moniteur série après la connexion au Wi-Fi. Les routes de lecture
+utilisent la méthode GET et les modifications utilisent la méthode PUT.
+
+La route \path{/} sert une interface web directement depuis l'ESP32. Cette
+page affiche la température, la luminosité, l'état de la LED, son mode et les
+seuils automatiques. Elle utilise uniquement les routes REST du projet pour
+actualiser les données et envoyer les commandes. La page est stockée en mémoire
+flash avec \texttt{PROGMEM}, afin de ne pas occuper inutilement la mémoire vive.
+Un rappel des routes REST est également visible en bas de la page d'accueil.
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{5.2cm}>{\centering\arraybackslash}p{1.8cm}>{\raggedright\arraybackslash}p{7cm}}
+  \caption{Routes de l'API REST}\\
+  \toprule
+  Route & Méthode & Fonction \\
+  \midrule
+  \endfirsthead
+  \toprule
+  Route & Méthode & Fonction \\
+  \midrule
+  \endhead
+  \path{/} & GET & Interface web de supervision et de commande. \\
+  \path{/api/v1/info} & GET & Adresse IP, puissance du signal Wi-Fi et durée de fonctionnement. \\
+  \path{/api/v1/sensors} & GET & Liste logique des capteurs et mesures courantes. \\
+  \path{/api/v1/sensors/temperature} & GET & Température courante. \\
+  \path{/api/v1/sensors/light} & GET & Valeur ADC et niveau de luminosité. \\
+  \path{/api/v1/led} & GET & État, mode et seuils de la LED. \\
+  \path{/api/v1/led} & PUT & Allume la LED avec le paramètre \texttt{state=on}. \\
+  \path{/api/v1/led} & PUT & Éteint la LED avec le paramètre \texttt{state=off}. \\
+  \path{/api/v1/led} & PUT & Inverse l'état avec le paramètre \texttt{state=toggle}. \\
+  \path{/api/v1/led} & PUT & Réactive le mode automatique avec \texttt{state=auto}. \\
+  \path{/api/v1/threshold} & PUT & Modifie les seuils de luminosité avec les paramètres \texttt{on} et \texttt{off}. \\
+  \bottomrule
+\end{longtable}
+
+La route \texttt{/api/v1/sensors} renvoie par exemple :
+
+\begin{lstlisting}[style=code,caption={Exemple de réponse de l'API des capteurs}]
+{
+  "sensors": ["temperature", "light"],
+  "light_adc": 1840,
+  "light_level": "moyen",
+  "thermistor_adc": 2050,
+  "temperature_c": 23.7
+}
+\end{lstlisting}
+
+Les erreurs de requête sont renvoyées avec le code HTTP 400. Une route
+inconnue renvoie le code 404. Cette distinction permet au client de ne pas
+confondre une erreur de chemin avec une mauvaise valeur de paramètre.
+
+\section{Écran et boutons}
+
+L'écran est organisé en trois pages :
+
+\begin{enumerate}
+  \item la température ;
+  \item la valeur brute de la photo-résistance et son niveau ;
+  \item l'état de la LED et son mode de fonctionnement.
+\end{enumerate}
+
+Le bouton relié à GPIO35 passe à la page suivante et celui relié à GPIO0
+revient à la page précédente. Un délai de 250 ms est utilisé pour éviter
+qu'un appui ne soit compté plusieurs fois. Le GPIO0 étant aussi lié au mode de
+démarrage de l'ESP32, son état au démarrage peut influencer le téléversement.
+
+\section{Validation fonctionnelle}
+
+La validation du prototype a été réalisée progressivement, en commençant par
+l'écran puis en ajoutant les capteurs, la LED et la communication Wi-Fi. Cette
+méthode a permis de vérifier chaque fonction avant son intégration dans le
+programme complet.
+
+\begin{table}[H]
+  \centering
+  \caption{Résultats de la validation fonctionnelle}
+  \label{tab:validation}
+  \begin{tabular}{>{\raggedright\arraybackslash}p{4cm}>{\raggedright\arraybackslash}p{10cm}}
+    \toprule
+    Fonction & Résultat observé \\
+    \midrule
+    Écran & Les trois pages affichent successivement la température, la luminosité et l'état de la LED. \\
+    Boutons & Les boutons permettent de parcourir les pages dans les deux sens. \\
+    Photo-résistance & La valeur ADC varie selon l'éclairage reçu par le capteur. \\
+    Thermistance & La température affichée varie lorsque la thermistance est chauffée ou touchée. \\
+    LED & La LED répond aux commandes manuelles et au mode automatique piloté par la luminosité. \\
+    Wi-Fi & La carte se connecte au réseau local et affiche son adresse IP dans le moniteur série. \\
+    API REST & Les routes de lecture des capteurs et de commande de la LED sont disponibles sur le serveur HTTP. \\
+    Gestion des erreurs & Les paramètres invalides renvoient HTTP 400 et les routes inconnues renvoient HTTP 404. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Gestion du microcontrôleur}
+
+\subsection{Erreurs et reconnexion}
+
+La connexion Wi-Fi possède un délai maximal de 20 secondes au démarrage. Si
+elle échoue, le programme continue de faire fonctionner l'écran et les
+capteurs, puis tente une reconnexion toutes les dix secondes. Une température
+invalide est représentée par une erreur sur l'écran et par la valeur JSON
+\texttt{null}.
+
+Les paramètres de seuil sont contrôlés avant modification. Ils doivent être
+compris entre 0 et 4095 et le seuil d'extinction doit être strictement
+supérieur au seuil d'allumage.
+
+\subsection{Configuration}
+
+Les paramètres du réseau Wi-Fi sont lus dans le fichier local
+\texttt{secrets.h}. Le fichier \texttt{secrets.h.example} décrit la structure
+de cette configuration sans contenir de données personnelles. La bibliothèque
+TFT\_eSPI utilise le fichier \path{Setup25_TTGO_T_Display.h} pour adapter
+le pilote à l'écran de la TTGO T-Display.
+
+\subsection{Autonomie}
+
+Le prototype ne met pas l'ESP32 en veille : le Wi-Fi, l'écran et le
+rétroéclairage restent actifs. Cette solution est adaptée à une alimentation
+par USB, mais elle n'est pas optimisée pour une batterie. Une version orientée
+autonomie pourrait réduire le rétroéclairage, espacer les mesures et utiliser
+les modes de veille de l'ESP32.
+
+\subsection{Sécurité}
+
+L'API n'utilise pas de clé d'accès et fonctionne en HTTP. Son utilisation est
+donc limitée au réseau local du projet. Une mise en production demanderait un
+service intermédiaire en HTTPS avec authentification, plutôt qu'une ouverture
+directe du port 80 vers l'ESP32. Les identifiants Wi-Fi restent séparés du
+rapport.
+
+\subsection{Mise à jour}
+
+La programmation actuelle s'effectue par USB avec Arduino IDE. Les capteurs
+sont alimentés en 3,3 V, tension utilisée par le montage. La mise à jour OTA
+ne fait pas partie de cette version du prototype.
+
+\section{Limites et améliorations possibles}
+
+La luminosité est donnée en valeur ADC et non en lux. Une conversion physique
+nécessiterait la caractérisation de la photo-résistance et de son pont
+diviseur. La température dépend également de la valeur réelle de la
+thermistance, de sa constante B et de la précision de la résistance fixe.
+
+Les seuils et le mode de la LED sont conservés uniquement en mémoire. Ils
+reviennent donc à leurs valeurs par défaut après un redémarrage. Une
+amélioration consisterait à les enregistrer dans la mémoire non volatile de
+l'ESP32, après avoir vérifié le nombre de cycles d'écriture.
+
+Enfin, le programme a été séparé en plusieurs fichiers pour rendre son
+organisation plus claire. Le fichier Arduino principal contient le démarrage,
+la boucle principale et la connexion Wi-Fi. Les fichiers
+\texttt{Capteurs.cpp/.h} regroupent les mesures analogiques et le calcul de la
+température, tandis que \texttt{Led.cpp/.h} contient la commande de la LED et
+la gestion des seuils. L'écran et les boutons sont regroupés dans
+\texttt{Affichage.cpp/.h}, l'API REST dans \texttt{Api.cpp/.h} et
+l'interface web dans \texttt{WebApp.cpp/.h}. Enfin,
+\texttt{Config.h} rassemble les broches et les constantes du montage.
+
+Cette séparation reste simple, mais elle facilite la lecture, les tests par
+fonction et les modifications ultérieures. Elle évite aussi de mélanger dans
+les mêmes fonctions la lecture des capteurs, l'affichage et les requêtes HTTP.
+
+\section{Conclusion}
+
+Le projet permet de réaliser une station de mesure simple autour d'un ESP32.
+Les valeurs de la température et de la luminosité sont acquises sur des
+entrées analogiques, affichées localement et rendues disponibles au moyen
+d'une API REST. La LED peut être commandée manuellement ou automatiquement à
+l'aide de seuils configurables.
+
+Le montage a été construit progressivement afin de tester chaque composant
+avant d'ajouter la fonction suivante. Cette méthode a permis de préserver le
+matériel et de repérer une erreur de composant lors du test de la
+thermistance. Les principales limites du prototype sont l'absence de
+chiffrement, la luminosité exprimée en valeur ADC et la perte des seuils lors
+d'un redémarrage. Elles sont prises en compte dans les perspectives
+d'amélioration.
+
+\section*{Références}
+\addcontentsline{toc}{section}{Références}
+
+\begin{itemize}
+  \item Sujet du projet fourni dans le cadre de l'UE HAI912I.
+  \item Tutoriel de prise en main du TTGO T-Display fourni par l'enseignant.
+  \item Documentation du kit Adafruit Parts Pal :
+  \url{https://www.adafruit.com/product/2975}.
+  \item Documentation de la bibliothèque TFT\_eSPI et de la configuration
+  TTGO T-Display.
+\end{itemize}
+
+\end{document}
